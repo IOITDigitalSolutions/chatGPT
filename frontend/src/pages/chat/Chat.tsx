@@ -169,7 +169,7 @@ const Chat = () => {
                         {!lastQuestionRef.current ? (
                             <Stack className={styles.chatEmptyState}>
                                 <img
-                                    src={Azure}
+                                    src={logo2}
                                     className={styles.chatIcon}
                                     aria-hidden="true"
                                 />
