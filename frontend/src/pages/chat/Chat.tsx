@@ -5,7 +5,7 @@ import { BroomRegular, DismissRegular, SquareRegular, ShieldLockRegular, ErrorCi
 import ReactMarkdown from "react-markdown";
 import remarkGfm from 'remark-gfm'
 import rehypeRaw from "rehype-raw"; 
-# comment
+
 import styles from "./Chat.module.css";
 import Azure from "../../assets/ioit-large.svg";
 
