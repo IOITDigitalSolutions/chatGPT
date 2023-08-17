@@ -3,17 +3,26 @@ import os
 import logging
 import requests
 import openai
-from flask import Flask, Response, request, jsonify
+from flask import Flask, Response, request, jsonify, send_from_directory
 from dotenv import load_dotenv
 
 load_dotenv()
 
-app = Flask(__name__)
+app = Flask(__name__, static_folder="static")
 
-@app.route("/", defaults={"path": "index.html"})
-@app.route("/<path:path>")
-def static_file(path):
-    return app.send_static_file(path)
+# Static Files
+@app.route("/")
+def index():
+    return app.send_static_file("index.html")
+
+@app.route("/favicon.ico")
+def favicon():
+    return app.send_static_file('favicon.ico')
+
+@app.route("/assets/<path:path>")
+def assets(path):
+    return send_from_directory("static/assets", path)
+
 
 # ACS Integration Settings
 AZURE_SEARCH_SERVICE = os.environ.get("AZURE_SEARCH_SERVICE")
@@ -32,14 +41,14 @@ AZURE_SEARCH_URL_COLUMN = os.environ.get("AZURE_SEARCH_URL_COLUMN")
 AZURE_OPENAI_RESOURCE = os.environ.get("AZURE_OPENAI_RESOURCE")
 AZURE_OPENAI_MODEL = os.environ.get("AZURE_OPENAI_MODEL")
 AZURE_OPENAI_KEY = os.environ.get("AZURE_OPENAI_KEY")
-AZURE_OPENAI_TEMPERATURE = os.environ.get("AZURE_OPENAI_TEMPERATURE", 0)
-AZURE_OPENAI_TOP_P = os.environ.get("AZURE_OPENAI_TOP_P", 1.0)
+AZURE_OPENAI_TEMPERATURE = os.environ.get("AZURE_OPENAI_TEMPERATURE", 0.7)
+AZURE_OPENAI_TOP_P = os.environ.get("AZURE_OPENAI_TOP_P", 0.95)
 AZURE_OPENAI_MAX_TOKENS = os.environ.get("AZURE_OPENAI_MAX_TOKENS", 1000)
 AZURE_OPENAI_STOP_SEQUENCE = os.environ.get("AZURE_OPENAI_STOP_SEQUENCE")
-AZURE_OPENAI_SYSTEM_MESSAGE = os.environ.get("AZURE_OPENAI_SYSTEM_MESSAGE", "You are an AI assistant that helps people find information.")
+AZURE_OPENAI_SYSTEM_MESSAGE = os.environ.get("AZURE_OPENAI_SYSTEM_MESSAGE", "Helping people find information.")
 AZURE_OPENAI_PREVIEW_API_VERSION = os.environ.get("AZURE_OPENAI_PREVIEW_API_VERSION", "2023-06-01-preview")
 AZURE_OPENAI_STREAM = os.environ.get("AZURE_OPENAI_STREAM", "true")
-AZURE_OPENAI_MODEL_NAME = os.environ.get("AZURE_OPENAI_MODEL_NAME", "gpt-35-turbo") # Name of the model, e.g. 'gpt-35-turbo' or 'gpt-4'
+AZURE_OPENAI_MODEL_NAME = os.environ.get("AZURE_OPENAI_MODEL_NAME", "gpt-4") # Name of the model, e.g. 'gpt-35-turbo' or 'gpt-4'
 
 SHOULD_STREAM = True if AZURE_OPENAI_STREAM.lower() == "true" else False
 
@@ -52,6 +61,11 @@ def should_use_data():
     if AZURE_SEARCH_SERVICE and AZURE_SEARCH_INDEX and AZURE_SEARCH_KEY:
         return True
     return False
+
+
+def format_as_ndjson(obj: dict) -> str:
+    return json.dumps(obj, ensure_ascii=False) + "\n"
+
 
 def prepare_body_headers_with_data(request):
     request_messages = request.json["messages"]
@@ -71,7 +85,7 @@ def prepare_body_headers_with_data(request):
                     "key": AZURE_SEARCH_KEY,
                     "indexName": AZURE_SEARCH_INDEX,
                     "fieldsMapping": {
-                        "contentField": AZURE_SEARCH_CONTENT_COLUMNS.split("|") if AZURE_SEARCH_CONTENT_COLUMNS else [],
+                        "contentFields": AZURE_SEARCH_CONTENT_COLUMNS.split("|") if AZURE_SEARCH_CONTENT_COLUMNS else [],
                         "titleField": AZURE_SEARCH_TITLE_COLUMN if AZURE_SEARCH_TITLE_COLUMN else None,
                         "urlField": AZURE_SEARCH_URL_COLUMN if AZURE_SEARCH_URL_COLUMN else None,
                         "filepathField": AZURE_SEARCH_FILENAME_COLUMN if AZURE_SEARCH_FILENAME_COLUMN else None
@@ -86,17 +100,9 @@ def prepare_body_headers_with_data(request):
         ]
     }
 
-    chatgpt_url = f"https://{AZURE_OPENAI_RESOURCE}.openai.azure.com/openai/deployments/{AZURE_OPENAI_MODEL}"
-    if is_chat_model():
-        chatgpt_url += "/chat/completions?api-version=2023-03-15-preview"
-    else:
-        chatgpt_url += "/completions?api-version=2023-03-15-preview"
-
     headers = {
         'Content-Type': 'application/json',
         'api-key': AZURE_OPENAI_KEY,
-        'chatgpt_url': chatgpt_url,
-        'chatgpt_key': AZURE_OPENAI_KEY,
         "x-ms-useragent": "GitHubSampleWebApp/PublicAPI/1.0.0"
     }
 
@@ -120,7 +126,7 @@ def stream_with_data(body, headers, endpoint):
                 if line:
                     lineJson = json.loads(line.lstrip(b'data:').decode('utf-8'))
                     if 'error' in lineJson:
-                        yield json.dumps(lineJson).replace("\n", "\\n") + "\n"
+                        yield format_as_ndjson(lineJson)
                     response["id"] = lineJson["id"]
                     response["model"] = lineJson["model"]
                     response["created"] = lineJson["created"]
@@ -139,9 +145,9 @@ def stream_with_data(body, headers, endpoint):
                         if deltaText != "[DONE]":
                             response["choices"][0]["messages"][1]["content"] += deltaText
 
-                    yield json.dumps(response).replace("\n", "\\n") + "\n"
+                    yield format_as_ndjson(response)
     except Exception as e:
-        yield json.dumps({"error": str(e)}).replace("\n", "\\n") + "\n"
+        yield format_as_ndjson({"error": str(e)})
 
 
 def conversation_with_data(request):
@@ -153,12 +159,12 @@ def conversation_with_data(request):
         status_code = r.status_code
         r = r.json()
 
-        return Response(json.dumps(r).replace("\n", "\\n"), status=status_code)
+        return Response(format_as_ndjson(r), status=status_code)
     else:
         if request.method == "POST":
-            return Response(stream_with_data(body, headers, endpoint), mimetype='text/event-stream')
+            return Response(stream_with_data(body, headers, endpoint))
         else:
-            return Response(None, mimetype='text/event-stream')
+            return Response(None)
 
 def stream_without_data(response):
     responseText = ""
@@ -179,7 +185,7 @@ def stream_without_data(response):
                 }]
             }]
         }
-        yield json.dumps(response_obj).replace("\n", "\\n") + "\n"
+        yield format_as_ndjson(response_obj)
 
 
 def conversation_without_data(request):
@@ -229,9 +235,9 @@ def conversation_without_data(request):
         return jsonify(response_obj), 200
     else:
         if request.method == "POST":
-            return Response(stream_without_data(response), mimetype='text/event-stream')
+            return Response(stream_without_data(response))
         else:
-            return Response(None, mimetype='text/event-stream')
+            return Response(None)
 
 @app.route("/conversation", methods=["GET", "POST"])
 def conversation():
